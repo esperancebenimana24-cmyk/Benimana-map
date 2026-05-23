@@ -1,0 +1,288 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Kigali Population Density Heatmap 2022</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <style>
+    * { margin:0; padding:0; box-sizing:border-box; }
+    body { font-family: Georgia, serif; }
+    #map { height:100vh; width:100%; }
+    #titlebar {
+      position:absolute; top:0; left:0; right:0; z-index:1000;
+      background:rgba(10,10,10,0.88); padding:10px 20px;
+      display:flex; align-items:center; justify-content:space-between;
+      border-bottom:1px solid rgba(255,200,50,0.25);
+    }
+    #titlebar h1 { font-size:15px; font-weight:normal; color:#f5d87a; letter-spacing:1.5px; text-transform:uppercase; }
+    #titlebar span { font-size:12px; color:#888; }
+    #legend {
+      position:absolute; bottom:36px; right:16px; z-index:1000;
+      background:rgba(10,10,10,0.85); border:1px solid rgba(255,200,50,0.2);
+      border-radius:8px; padding:14px 16px; min-width:175px;
+    }
+    #legend h3 { font-size:11px; color:#f5d87a; letter-spacing:1.2px; text-transform:uppercase; margin-bottom:10px; }
+    .legend-bar { width:100%; height:12px; border-radius:4px; background:linear-gradient(to right,#0000ff,#00ffff,#00ff00,#ffff00,#ff0000); margin-bottom:5px; }
+    .legend-labels { display:flex; justify-content:space-between; font-size:10px; color:#aaa; margin-bottom:10px; }
+    .legend-item { display:flex; align-items:center; gap:8px; margin-bottom:5px; font-size:11px; color:#ccc; }
+    .legend-dot { width:11px; height:11px; border-radius:50%; flex-shrink:0; }
+    hr.ld { border:none; border-top:1px solid rgba(255,255,255,0.08); margin:8px 0; }
+    .legend-formula { font-size:10px; color:#888; font-style:italic; margin-top:4px; }
+    #datasource { position:absolute; bottom:8px; left:50%; transform:translateX(-50%); z-index:1000; font-size:10px; color:#555; white-space:nowrap; }
+    .leaflet-tooltip { background:rgba(10,10,10,0.92)!important; border:1px solid rgba(255,200,50,0.3)!important; color:#f5d87a!important; font-size:12px!important; border-radius:6px!important; padding:6px 10px!important; }
+  </style>
+</head>
+<body>
+<div id="titlebar">
+  <h1>Kigali City — Population Density Heatmap</h1>
+  <span>Rwanda 2022 Census &nbsp;|&nbsp; 35 Sectors</span>
+</div>
+<div id="map"></div>
+<div id="legend">
+  <h3>Population Density</h3>
+  <div class="legend-bar"></div>
+  <div class="legend-labels"><span>Low</span><span>Medium</span><span>High</span></div>
+  <hr class="ld"/>
+  <div class="legend-item"><div class="legend-dot" style="background:#ff0000"></div><span>Very High Density</span></div>
+  <div class="legend-item"><div class="legend-dot" style="background:#ffff00"></div><span>High Density</span></div>
+  <div class="legend-item"><div class="legend-dot" style="background:#00ff00"></div><span>Medium Density</span></div>
+  <div class="legend-item"><div class="legend-dot" style="background:#00ffff"></div><span>Low-Medium Density</span></div>
+  <div class="legend-item"><div class="legend-dot" style="background:#0000ff"></div><span>Low Density</span></div>
+  <hr class="ld"/>
+  <div class="legend-formula">Intensity = Population / Area (km²)</div>
+</div>
+<div id="datasource">Source: NISR Rwanda Census 2022 &nbsp;|&nbsp; Boundaries: RWA_adm3</div>
+
+<script>
+// ── simpleheat ───────────────────────────────────────────────────────────────
+function simpleheat(canvas) {
+  if (!(this instanceof simpleheat)) return new simpleheat(canvas);
+  this._canvas = typeof canvas === 'string' ? document.getElementById(canvas) : canvas;
+  this._ctx    = this._canvas.getContext('2d');
+  this._width  = this._canvas.width;
+  this._height = this._canvas.height;
+  this._max    = 1;
+  this._data   = [];
+}
+simpleheat.prototype = {
+  defaultRadius: 25,
+  defaultGradient: {0.4:'blue',0.6:'cyan',0.7:'lime',0.8:'yellow',1:'red'},
+  data:  function(d){ this._data=d; return this; },
+  max:   function(m){ this._max=m; return this; },
+  add:   function(p){ this._data.push(p); return this; },
+  clear: function(){ this._data=[]; return this; },
+  radius: function(r, blur){
+    blur = blur === undefined ? 15 : blur;
+    var circle = this._circle = document.createElement('canvas');
+    var ctx = circle.getContext('2d');
+    var b = this._r = r + blur;
+    circle.width = circle.height = 2 * b;
+    ctx.shadowOffsetX = ctx.shadowOffsetY = 200;
+    ctx.shadowBlur  = blur;
+    ctx.shadowColor = 'black';
+    ctx.beginPath();
+    ctx.arc(b - 200, b - 200, r, 0, Math.PI * 2, true);
+    ctx.closePath();
+    ctx.fill();
+    return this;
+  },
+  gradient: function(grad){
+    var canvas = document.createElement('canvas');
+    var ctx = canvas.getContext('2d');
+    canvas.width = 1; canvas.height = 256;
+    var g = ctx.createLinearGradient(0, 0, 0, 256);
+    for (var i in grad) g.addColorStop(+i, grad[i]);
+    ctx.fillStyle = g;
+    ctx.fillRect(0, 0, 1, 256);
+    this._grad = ctx.getImageData(0, 0, 1, 256).data;
+    return this;
+  },
+  draw: function(minOpacity){
+    if (!this._circle) this.radius(this.defaultRadius);
+    if (!this._grad)   this.gradient(this.defaultGradient);
+    var ctx = this._ctx;
+    ctx.clearRect(0, 0, this._width, this._height);
+    for (var i = 0, p; i < this._data.length; i++){
+      p = this._data[i];
+      ctx.globalAlpha = Math.min(Math.max(p[2] / this._max, minOpacity || 0.05), 1);
+      ctx.drawImage(this._circle, p[0] - this._r, p[1] - this._r);
+    }
+    var img = ctx.getImageData(0, 0, this._width, this._height);
+    var pixels = img.data;
+    for (var j = 3; j < pixels.length; j += 4){
+      var k = pixels[j] * 4;
+      if (k){
+        pixels[j-3] = this._grad[k];
+        pixels[j-2] = this._grad[k+1];
+        pixels[j-1] = this._grad[k+2];
+      }
+    }
+    ctx.putImageData(img, 0, 0);
+    return this;
+  }
+};
+
+// ── Leaflet HeatLayer (fixed for Leaflet 1.9) ────────────────────────────────
+L.HeatLayer = L.Layer.extend({
+  options: { minOpacity:0.05, maxZoom:18, radius:25, blur:15, max:1.0 },
+  initialize: function(latlngs, options){
+    this._latlngs = latlngs;
+    L.setOptions(this, options);
+  },
+  addTo: function(map){ map.addLayer(this); return this; },
+  onAdd: function(map){
+    this._map = map;
+    this._canvas = L.DomUtil.create('canvas', 'leaflet-heatmap-layer leaflet-layer');
+    var size = map.getSize();
+    this._canvas.width  = size.x;
+    this._canvas.height = size.y;
+    map.getPanes().overlayPane.appendChild(this._canvas);
+    var animated = map.options.zoomAnimation && L.Browser.any3d;
+    L.DomUtil.addClass(this._canvas, animated ? 'leaflet-zoom-animated' : 'leaflet-zoom-hide');
+    this._heat = simpleheat(this._canvas);
+    this._heat.radius(this.options.radius, this.options.blur);
+    if (this.options.gradient) this._heat.gradient(this.options.gradient);
+    this._heat.max(this.options.max);
+    map.on('moveend', this._reset, this);
+    if (animated) map.on('zoomanim', this._animateZoom, this);
+    this._reset();
+  },
+  onRemove: function(map){
+    map.getPanes().overlayPane.removeChild(this._canvas);
+    map.off('moveend', this._reset, this);
+    if (map.options.zoomAnimation) map.off('zoomanim', this._animateZoom, this);
+  },
+  _reset: function(){
+    var topLeft = this._map.containerPointToLayerPoint([0, 0]);
+    L.DomUtil.setPosition(this._canvas, topLeft);
+    var size = this._map.getSize();
+    this._canvas.width  = this._heat._width  = size.x;
+    this._canvas.height = this._heat._height = size.y;
+    this._redraw();
+  },
+  _redraw: function(){
+    if (!this._map) return;
+    var r        = this._heat._r;
+    var size     = this._map.getSize();
+    // FIX: manually create bounds without .extend()
+    var bounds   = new L.Bounds(
+      L.point(-r, -r),
+      L.point(size.x + r, size.y + r)
+    );
+    var max      = this.options.max;
+    var maxZoom  = this.options.maxZoom !== undefined ? this.options.maxZoom : this._map.getMaxZoom();
+    var v        = 1 / Math.pow(2, Math.max(0, Math.min(maxZoom - this._map.getZoom(), 12)));
+    var cellSize = r / 2;
+    var panePos  = this._map._getMapPanePos();
+    var offsetX  = panePos.x % cellSize;
+    var offsetY  = panePos.y % cellSize;
+    var grid = [], data = [];
+
+    for (var i = 0; i < this._latlngs.length; i++){
+      var p   = this._map.latLngToContainerPoint(this._latlngs[i]);
+      var alt = this._latlngs[i][2] !== undefined ? +this._latlngs[i][2] : 1;
+      var k   = alt * v;
+      if (!bounds.contains(p)) continue;
+      var x = Math.floor((p.x - offsetX) / cellSize) + 2;
+      var y = Math.floor((p.y - offsetY) / cellSize) + 2;
+      grid[y] = grid[y] || [];
+      var cell = grid[y][x];
+      if (!cell){
+        grid[y][x] = [p.x, p.y, k];
+      } else {
+        cell[0] = (cell[0]*cell[2] + p.x*k) / (cell[2]+k);
+        cell[1] = (cell[1]*cell[2] + p.y*k) / (cell[2]+k);
+        cell[2] += k;
+      }
+    }
+    for (var ii = 0; ii < grid.length; ii++){
+      if (grid[ii]){
+        for (var jj = 0; jj < grid[ii].length; jj++){
+          var c = grid[ii][jj];
+          if (c) data.push([Math.round(c[0]), Math.round(c[1]), Math.min(c[2], max)]);
+        }
+      }
+    }
+    this._heat.data(data).draw(this.options.minOpacity);
+  },
+  _animateZoom: function(e){
+    var scale  = this._map.getZoomScale(e.zoom);
+    var offset = this._map._getCenterOffset(e.center)._multiplyBy(-scale).subtract(this._map._getMapPanePos());
+    if (L.DomUtil.setTransform){
+      L.DomUtil.setTransform(this._canvas, offset, scale);
+    } else {
+      this._canvas.style[L.DomUtil.TRANSFORM] = L.DomUtil.getTranslateString(offset) + ' scale(' + scale + ')';
+    }
+  }
+});
+L.heatLayer = function(latlngs, options){ return new L.HeatLayer(latlngs, options); };
+
+// ── Map ──────────────────────────────────────────────────────────────────────
+var map = L.map('map').setView([-1.9441, 30.0619], 12);
+L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+  attribution: '© OpenStreetMap contributors', opacity: 0.5
+}).addTo(map);
+
+// [lat, lng, population, area_m2, name]
+var sectors = [
+  [-1.88783688370214, 30.1559036191124, 112899, 60602935.49, "Bumbogo"],
+  [-1.92203641315911, 30.0422749313286,  46262,  6022294.28, "Gatsata"],
+  [-1.87484986682698, 30.2289708695859,  19630, 35061220.56, "Gikomero"],
+  [-1.91777268024016, 30.0612830476428,  75611,  8304326.01, "Gisozi"],
+  [-1.86432622934411, 30.0640242006777,  63862, 36383258.94, "Jabana"],
+  [-1.88246683056124, 30.0165817659341,  41156, 37373911.45, "Jali"],
+  [-1.93761194409157, 30.0804577868068,  30036,  5784285.40, "Kacyiru"],
+  [-1.95429040077958, 30.0883005607869,  16425,  5071363.53, "Kimihurura"],
+  [-1.93835794147302, 30.1242185987989,  61733, 11333208.22, "Kimironko"],
+  [-1.90894137034431, 30.0964969848406, 125400, 24195044.83, "Kinyinya"],
+  [-1.93357369042283, 30.1868176897475,  95164, 50376058.25, "Ndera"],
+  [-1.85117508880618, 30.1127167790072,  68424, 46543293.70, "Nduba"],
+  [-1.94755314979014, 30.1060670711728,  38648,  7267060.31, "Remera"],
+  [-1.9365378123346,  30.2358517196364,  61787, 52232086.36, "Rusororo"],
+  [-1.82512840707026, 30.1744389639589,  22468, 42709540.05, "Rutunga"],
+  [-2.03160260410916, 30.1096438139669,  79082, 36768186.67, "Gahanga"],
+  [-1.99817049126162, 30.082883044987,   67084, 12440651.56, "Gatenga"],
+  [-1.97318728870597, 30.0786853823457,  19803,  3385721.07, "Gikondo"],
+  [-1.9977383719091,  30.1133877397307,  21277,  7994261.86, "Kagarama"],
+  [-1.99771461755773, 30.1449557976916,  72346, 22999202.76, "Kanombe"],
+  [-1.97181235969705, 30.0971527196016,  14039,  2048256.44, "Kicukiro"],
+  [-1.9875184548439,  30.0645767739392,  63153,  8362453.14, "Kigarama"],
+  [-2.02225578150445, 30.2031517980889,  78788, 52714201.31, "Masaka"],
+  [-1.97635160562625, 30.1138151025277,  26912,  5027340.41, "Niboye"],
+  [-1.97446976221305, 30.1579828813976,  49247, 15279325.83, "Nyarugunga"],
+  [-1.95341314527993, 30.055061263476,   26668,  1173652.80, "Gitega"],
+  [-1.91782097561705, 30.002522749428,   31026, 24174576.91, "Kanyinya"],
+  [-1.97916811673435, 30.0189511135342,  61499, 29382100.33, "Kigali"],
+  [-1.95294055459675, 30.0460977356388,  56534,  3312802.11, "Kimisagara"],
+  [-2.04191681380047, 30.0360264063698,  59747, 54651263.47, "Mageregere"],
+  [-1.94121540702503, 30.060921585213,   22531,  2943652.42, "Muhima"],
+  [-1.96951502045193, 30.0450386397007,  29580,  2424245.23, "Nyakabanda"],
+  [-1.99258217136631, 30.0432621228424,  55315,  8746032.11, "Nyamirambo"],
+  [-1.95681326033571, 30.0642704770712,  16665,  4626396.43, "Nyarugenge"],
+  [-1.97124902727083, 30.0526389403833,  14754,  1026899.27, "Rwezamenyo"]
+];
+
+var densities = sectors.map(function(s){ return s[2] / (s[3] / 1e6); });
+var maxDensity = Math.max.apply(null, densities);
+
+var heatData = sectors.map(function(s, i){
+  return [s[0], s[1], densities[i] / maxDensity];
+});
+
+L.heatLayer(heatData, {
+  radius: 35, blur: 25, maxZoom: 13, max: 1.0,
+  gradient: {0.0:'#0000ff', 0.3:'#00ffff', 0.5:'#00ff00', 0.7:'#ffff00', 1.0:'#ff0000'}
+}).addTo(map);
+
+sectors.forEach(function(s, i){
+  var area_km2 = (s[3]/1e6).toFixed(2);
+  var density  = Math.round(densities[i]).toLocaleString();
+  L.circleMarker([s[0],s[1]], {radius:14, fillOpacity:0, opacity:0})
+   .bindTooltip('<strong>'+s[4]+'</strong><br>Population: '+s[2].toLocaleString()+'<br>Area: '+area_km2+' km²<br>Density: '+density+' people/km²', {sticky:true})
+   .addTo(map);
+});
+</script>
+</body>
+</html>
